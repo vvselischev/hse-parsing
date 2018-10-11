@@ -1,102 +1,193 @@
-module Parser where
+module Parser (parse) where -- only expose the top-level parsing function
 
-import Tokenizer
-import Prelude hiding (lookup)
+import Data.List (dropWhileEnd)
+import Data.Char (isSpace)
+import Combinators
+import qualified Tokenizer as T
+import Prelude hiding (lookup, (>>=), map, pred, return, elem)
 
-data AST = ASum Operator AST AST
-         | AProd Operator AST AST
-         | AUnaryMinus AST
-         | APow Operator AST AST
+data AST = ASum T.Operator AST AST
+         | AProd T.Operator AST AST
          | AAssign String AST
          | ANum Integer
+         | AUnaryMinus AST
+         | APow AST AST
          | AIdent String
+         | AList [AST]
+         | AListEssence [AST]
+         | AComma Char
+         | AParenth Char
+         | AListConcat AST AST
 
-parse :: String -> Maybe AST
+-- TODO: Rewrite this without using Success and Error
+parse :: String -> Maybe (Result [AST])
 parse input =
-  let ts = tokenize input in
-  case ts of
-    [TEof] -> Nothing
-    _ -> let (tree, ts') = expression ts in
-         if ts' == [TEof]
-         then Just tree
-         else error ("Parsing error on: " ++ show ts')
-
-expression :: [Token] -> (AST, [Token])
-expression ts =
-  let (termNode, ts') = term ts in
-  case lookup ts' of
-    TOp op | op == Plus || op == Minus ->
-      let (exprNode, ts'') = expression $ accept ts' in
-      (ASum op termNode exprNode, ts'')
-    TAssign ->
-      case termNode of
-        AIdent v -> let (exprNode, ts'') = expression $ accept ts' in
-                    (AAssign v exprNode, ts'')
-        _ -> error "Syntax error: assignment is only possible to identifiers"
-    _ -> (termNode, ts')
-
-term :: [Token] -> (AST, [Token])
-term ts =
-  let (powNode, ts') = powTerm ts in
-  case lookup ts' of
-    TOp op | op == Mult || op == Div ->
-      let (termNode, ts'') = term $ accept ts' in
-      (AProd op powNode termNode, ts'')
-    _ -> (powNode, ts')
-    
-powTerm :: [Token] -> (AST, [Token])
-powTerm ts =
-  let (unaryNode, ts') = unaryTerm ts in
-  case lookup ts' of
-    TOp op | op == Pow ->
-      let (termNode, ts'') = powTerm $ accept ts' in
-      (APow op unaryNode termNode, ts'')
-    _ -> (unaryNode, ts')
-    
-unaryTerm :: [Token] -> (AST, [Token])
-unaryTerm ts =
-  case lookup ts of
-    TOp op | op == Minus ->
-      let (termNode, ts'') = unaryTerm $ accept ts in
-      (AUnaryMinus termNode, ts'')
-    _ -> factor ts
-
-factor :: [Token] -> (AST, [Token])
-factor ts =
-  case lookup ts of
-    TLParen ->
-      let (exprNode, ts') = expression $ accept ts in
-      case lookup ts' of
-        TRParen -> (exprNode, accept ts')
-        _ -> error "Syntax error: mismatched parentheses"
-    TIdent v -> (AIdent v, accept ts)
-    TNumber d -> (ANum d, accept ts)
-    _ -> error "Syntax error: factor can only be a digit, an identifier or a parenthesised expression"
+  case input' of
+    [] -> Nothing
+    _ -> case statementList input' of
+           Success (tree, ts') ->
+             if null ts'
+             then Just (Success tree)
+             else Just (Error ("Syntax error on: " ++ show ts')) -- Only a prefix of the input is parsed
+           Error err -> Just (Error err) -- Legitimate syntax error
+  where input' = input --deleteSpaces input
 
 
+statementList :: Parser [AST]
+statementList =
+  (globalExpression >>= \g ->
+   semicolon |>
+   statementList >>= \r -> return (g : r))
+  <|> globalExpression >>= \e -> return [e]
 
-lookup :: [Token] -> Token
-lookup = head
+globalExpression :: Parser AST
+globalExpression =
+  (listTerm >>= \l ->
+   concatOp |>
+   listConcat >>= \r -> return (AListConcat l r))
+  <|> expression
+  <|> listTerm
 
-accept :: [Token] -> [Token]
-accept = tail
+listConcat :: Parser AST
+listConcat =
+  (listTerm >>= \l ->
+   concatOp |>
+   listConcat >>= \r -> return (AListConcat l r))
+  <|> listTerm
+  
+listTerm :: Parser AST
+listTerm =
+  (lsqparen |>
+    rsqparen |> return (AList []))
+  <|>
+  (lsqparen |>
+   listEssence >>= \e ->
+   rsqparen |> return (AList e))
+  <|> identifier
+  
+listEssence :: Parser [AST]
+listEssence =
+  (globalExpression >>= \e  -> 
+   comma |>
+   listEssence >>= \t -> return (e : t)
+   )
+  <|> globalExpression >>= \e -> return (e : [])
+
+expression :: Parser AST
+expression =
+  ( identifier >>= \(AIdent i) ->
+    assignment |>
+    globalExpression >>= \e -> return (AAssign i e)
+  )
+  <|> ( term       >>= \l  -> -- Here the identifier is parsed twice :(
+        plusMinus  >>= \op ->
+        expression >>= \r  -> return (ASum op l r)
+      )
+  <|> term
+
+term :: Parser AST
+term =
+  -- make sure we don't reparse the factor (Term -> Factor (('/' | '*') Term | epsilon ))
+  unaryTerm >>= \l ->
+  ( ( divMult >>= \op ->
+      unaryTerm    >>= \r  -> return (AProd op l r)
+    )
+    <|> return l
+  )
+
+unaryTerm :: Parser AST
+unaryTerm = powTerm
+            <|> (unaryMinus|> powTerm >>= \f -> return (AUnaryMinus f))
+
+powTerm :: Parser AST
+powTerm = (factor >>= \l -> 
+           pow |>
+           factor >>= \r -> return (APow l r))
+          <|> factor
+  
+factor :: Parser AST
+factor =
+  ( lparen |>
+    expression >>= \e ->
+    rparen |> return e -- No need to keep the parentheses
+  )
+  <|> identifier
+  <|> numeric
+  
+
+numeric :: Parser AST
+numeric = map (ANum) (number)
+
+identifier :: Parser AST
+identifier = map (AIdent) (ident)
+
+
+lparen :: Parser Char
+lparen = char '('
+
+rparen :: Parser Char
+rparen = char ')'
+
+lsqparen :: Parser Char
+lsqparen = char '['
+
+rsqparen :: Parser Char
+rsqparen = char ']'
+
+comma :: Parser Char
+comma = char ','
+
+semicolon :: Parser Char
+semicolon = char ';'
+
+assignment :: Parser Char
+assignment = char '='
+
+pow :: Parser Char
+pow = char '^'
+
+unaryMinus :: Parser Char
+unaryMinus = char '-'
+
+concatOp :: Parser Char
+concatOp = char '+' |> char '+'
+
+plusMinus :: Parser T.Operator
+plusMinus = map T.operator (char '+' <|> char '-')
+
+divMult :: Parser T.Operator
+divMult   = map T.operator (char '/' <|> char '*')
+
+deleteSpaces :: String -> String
+deleteSpaces [] = []
+deleteSpaces (c : cs) | isSpace c = cs'
+                      | otherwise = (c : cs')
+                      where cs' = deleteSpaces cs
+   
+                     
 
 instance Show AST where
-  show tree = "\n" ++ show' 0 tree
+  show tree = "\n" ++ show' 0 0 tree
     where
-      show' n t =
-        (if n > 0 then \s -> concat (replicate (n - 1) "| ") ++ "|_" ++ s else id)
+      show' n f t =
+        (if (n > 0) && (f == 1) then \s -> concat (replicate (n - 1) "| ") ++ "|_" ++ s else id)
         (case t of
-                  ASum  op l r -> showOp op : "\n" ++ show' (ident n) l ++ "\n" ++ show' (ident n) r
-                  AProd op l r -> showOp op : "\n" ++ show' (ident n) l ++ "\n" ++ show' (ident n) r
-                  AAssign  v e -> v ++ " =\n" ++ show' (ident n) e
-                  AUnaryMinus v -> "-\n" ++ show' (ident n) v
-                  APow op l r -> showOp op : "\n" ++ show' (ident n) l ++ "\n" ++ show' (ident n) r
+                  ASum  op l r -> showOp op : "\n" ++ show' (ident n) 1  l ++ "\n" ++ show' (ident n) 1 r
+                  AProd op l r -> showOp op : "\n" ++ show' (ident n) 1 l ++ "\n" ++ show' (ident n) 1 r
+                  AAssign  v e -> v ++ " =\n" ++ show' (ident n) 1 e
                   ANum   i     -> show i
-                  AIdent i     -> show i)
+                  AIdent i     -> show i
+                  AUnaryMinus v -> "-\n" ++ show' (ident n) 1 v
+                  APow l r -> '^' : "\n" ++ show' (ident n) 1 l ++ "\n" ++ show' (ident n) 1 r 
+                  AListConcat l r -> "++\n" ++ show' (ident n) 1 l ++ "\n" ++ show' (ident n) 1 r
+                  AList list -> "[" ++ show' (ident n) 0 (AListEssence list) ++ "\n" ++ show' n 1 (AParenth ']')
+                  AListEssence (e : []) -> "\n" ++ show' (ident n) 1 e
+                  AListEssence (e : es) -> "\n" ++ show' (ident n) 1 e ++ "\n" ++ show' n 1 (AComma ',') ++ show' n 0 (AListEssence es)
+                  AListEssence [] -> ""
+                  AComma c -> [c]
+                  AParenth c -> [c])
       ident = (+1)
-      showOp Plus  = '+'
-      showOp Minus = '-'
-      showOp Mult  = '*'
-      showOp Div   = '/'
-      showOp Pow   = '^'
+      showOp T.Plus  = '+'
+      showOp T.Minus = '-'
+      showOp T.Mult  = '*'
+      showOp T.Div   = '/'
