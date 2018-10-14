@@ -90,14 +90,15 @@ term =
   -- make sure we don't reparse the factor (Term -> Factor (('/' | '*') Term | epsilon ))
   unaryTerm >>= \l ->
   ( ( divMult >>= \op ->
-      unaryTerm    >>= \r  -> return (AProd op l r)
+      term    >>= \r  -> return (AProd op l r)
     )
     <|> return l
   )
 
 unaryTerm :: Parser AST
-unaryTerm = powTerm
-            <|> (unaryMinus|> powTerm >>= \f -> return (AUnaryMinus f))
+unaryTerm = 
+  powTerm
+  <|> (unaryMinus|> powTerm >>= \f -> return (AUnaryMinus f))
 
 powTerm :: Parser AST
 powTerm = (factor >>= \l -> 
