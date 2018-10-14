@@ -103,7 +103,7 @@ unaryTerm =
 powTerm :: Parser AST
 powTerm = (factor >>= \l -> 
            pow |>
-           factor >>= \r -> return (APow l r))
+           unaryTerm >>= \r -> return (APow l r))
           <|> factor
   
 factor :: Parser AST
