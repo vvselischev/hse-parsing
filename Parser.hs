@@ -19,32 +19,24 @@ data AST = ASum T.Operator AST AST
          | AParenth Char
          | AListConcat AST AST
 
--- TODO: Rewrite this without using Success and Error
-parse :: String -> Maybe (Result [AST])
-parse input =
-  case input' of
-    [] -> Nothing
-    _ -> case statementList input' of
-           Success (tree, ts') ->
-             if null ts'
-             then Just (Success tree)
-             else Just (Error ("Syntax error on: " ++ show ts')) -- Only a prefix of the input is parsed
-           Error err -> Just (Error err) -- Legitimate syntax error
-  where input' = input --deleteSpaces input
-
+parse :: Parser[AST]
+parse =
+  (empty |> return [])
+  <|> (statementList >>= \s -> empty |> return s)
+  <|> zero ("Syntax error: only a prefix of the input is parsed")
 
 statementList :: Parser [AST]
 statementList =
   (globalExpression >>= \g ->
-   semicolon |>
-   statementList >>= \r -> return (g : r))
+    semicolon |>
+    statementList >>= \r -> return (g : r))
   <|> globalExpression >>= \e -> return [e]
 
 globalExpression :: Parser AST
 globalExpression =
   (listTerm >>= \l ->
    concatOp |>
-   listConcat >>= \r -> return (AListConcat l r))
+  listConcat >>= \r -> return (AListConcat l r))
   <|> expression
   <|> listTerm
 
@@ -58,7 +50,7 @@ listConcat =
 listTerm :: Parser AST
 listTerm =
   (lsqparen |>
-    rsqparen |> return (AList []))
+   rsqparen |> return (AList []))
   <|>
   (lsqparen |>
    listEssence >>= \e ->

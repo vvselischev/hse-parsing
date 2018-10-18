@@ -56,6 +56,10 @@ elem :: Parser Char
 elem (c : cs) = Success (c, cs) 
 elem [] = Error "Empty string"
 
+empty :: Parser Char
+empty [] = Success (' ', [])
+empty _  = Error "Unexpected symbol"
+
 number :: Parser Integer
 number cs = if length(numStr) > 0
             then Success ((read numStr ::Integer), drop ((length numStr)) cs)
