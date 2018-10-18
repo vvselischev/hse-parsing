@@ -19,8 +19,17 @@ data AST = ASum T.Operator AST AST
          | AParenth Char
          | AListConcat AST AST
 
-parse :: Parser[AST]
-parse =
+parse :: String -> Maybe(Result [AST])
+parse input = 
+  case input of
+    [] -> Nothing
+    _  -> Just (mapResult getFirst (parse' input))
+
+getFirst :: (a, b) -> a
+getFirst (a, b) = a
+
+parse' :: Parser [AST]
+parse' =
   (empty |> return [])
   <|> (statementList >>= \s -> empty |> return s)
   <|> zero ("Syntax error: only a prefix of the input is parsed")

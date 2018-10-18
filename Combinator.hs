@@ -105,3 +105,9 @@ map f parser inp =
   case parser inp of
     Success (r, inp') -> Success (f r, inp')
     Error err -> Error err
+    
+mapResult :: (a -> b) -> Result a -> Result b
+mapResult f inp = 
+  case inp of
+    Success success -> Success (f success)
+    Error err -> Error err
